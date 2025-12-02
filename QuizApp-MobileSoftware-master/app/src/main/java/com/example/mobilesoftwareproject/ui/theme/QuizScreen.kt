@@ -48,6 +48,15 @@ import com.example.mobilesoftwareproject.data.QuizData
 import com.example.mobilesoftwareproject.data.WrongAnswerStore
 import com.example.mobilesoftwareproject.model.Question
 import com.example.mobilesoftwareproject.model.WrongAnswer
+import kotlinx.coroutines.delay
+
+
+//피드백 상태 관리하는 enum 클래스
+private enum class FeedbackState {
+    CORRECT,
+    WRONG,
+    NONE
+}
 
 // 메인 퀴즈 화면 Composable
 @Composable
@@ -68,8 +77,35 @@ fun QuizScreen(
     var currentIndex by remember { mutableIntStateOf(0) }
     // 각 문제에 대해 사용자가 선택한 답을 저장하는 Map
     val userAnswers = remember { mutableStateMapOf<Int, Int?>() }
+    // 선택 발생 여부와 선택된 답을 저장할 상태를 추가
+    var selectionMade by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var feedbackState by remember { mutableStateOf(FeedbackState.NONE) }
     val currentQuestion = questions[currentIndex]
     val categoryTitle = QuizData.getCategoryTitleById(categoryId)
+
+    // selectionMade 상태가 변경될 때마다 실행
+    LaunchedEffect(selectionMade) {
+        // 사용자가 선택을 했을 경우
+        selectionMade?.let { (questionIndex, answerIndex) ->
+            // 사용자 답변을 저장
+            userAnswers[questionIndex] = answerIndex
+            val isCorrect = answerIndex == questions[questionIndex].answerIndex
+            if (isCorrect) {
+                SoundManager.playSound(R.raw.right) // 정답 사운드 재생
+                feedbackState = FeedbackState.CORRECT
+            } else {
+                SoundManager.playSound(R.raw.wrong) // 오답 사운드 재생
+                feedbackState = FeedbackState.WRONG
+            }
+
+            if (questionIndex < questions.lastIndex) {
+                delay(1000L) // 1초 지연
+                currentIndex++
+                selectionMade = null
+                feedbackState = FeedbackState.NONE
+            }
+        }
+    }
 
     // 전체 배경
     Box(
@@ -139,7 +175,19 @@ fun QuizScreen(
                     optionChar = ('A' + index).toString(),
                     optionText = optionText,
                     isSelected = userAnswers[currentIndex] == index,
-                    onClick = { userAnswers[currentIndex] = index }
+                    feedbackState = feedbackState,
+                    isCorrectOption = index == currentQuestion.answerIndex,
+                    onClick = {
+                        //마지막 문제에서 선택을 변경할 수 없음
+                        if (currentIndex == questions.lastIndex && userAnswers[currentIndex] != null) {
+                            return@OptionItem
+                        }
+
+                        // 진행 중인 선택(1초 딜레이)이 없을 때만 새로운 선택을 허용함
+                        if (selectionMade == null) {
+                            selectionMade = Pair(currentIndex, index)
+                        }
+                    }
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }
@@ -147,32 +195,29 @@ fun QuizScreen(
             Spacer(modifier = Modifier.weight(1f))
 
             // 하단 네비게이션 버튼
-            BottomNavigation(
-                isFirst = currentIndex == 0,
-                isLast = currentIndex == questions.lastIndex,
-                onPrev = { if (currentIndex > 0) currentIndex-- },
-                onNext = { if (currentIndex < questions.lastIndex) currentIndex++ },
-                onSubmit = {
-                    var score = 0
-                    questions.forEachIndexed { index, question ->
-                        val userAnswerIndex = userAnswers[index]
-                        if (userAnswerIndex == question.answerIndex) {
-                            score++
-                        } else if (userAnswerIndex != null) {
-                            // 오답인 경우 기록
-                            WrongAnswerStore.addWrongAnswer(
-                                WrongAnswer(
-                                    question = question,
-                                    myAnswerIndex = userAnswerIndex,
-                                    correctIndex = question.answerIndex,
-                                    categoryId = categoryId
+            if (currentIndex == questions.lastIndex && userAnswers[currentIndex] != null) {
+                SubmitButton(
+                    onClick = {
+                        var score = 0
+                        questions.forEachIndexed { index, question ->
+                            val userAnswerIndex = userAnswers[index]
+                            if (userAnswerIndex == question.answerIndex) {
+                                score++
+                            } else if (userAnswerIndex != null) {
+                                WrongAnswerStore.addWrongAnswer(
+                                    WrongAnswer(
+                                        question = question,
+                                        myAnswerIndex = userAnswerIndex,
+                                        correctIndex = question.answerIndex,
+                                        categoryId = categoryId
+                                    )
                                 )
-                            )
+                            }
                         }
+                        onQuizFinished(score, questions.size)
                     }
-                    onQuizFinished(score, questions.size)
-                }
-            )
+                )
+            }
             Spacer(modifier = Modifier.height(34.dp))
         }
     }
@@ -275,6 +320,8 @@ private fun OptionItem(
     optionChar: String,
     optionText: String,
     isSelected: Boolean,
+    feedbackState: FeedbackState,
+    isCorrectOption: Boolean,
     onClick: () -> Unit
 ) {
     val backgroundBrush = if (isSelected) {
@@ -287,13 +334,27 @@ private fun OptionItem(
     }
     val textColor = if (isSelected) AppColors.color_1 else AppColors.color_black
 
+    val borderColor = when {
+        // 선택한 게 정답
+        isSelected && feedbackState == FeedbackState.CORRECT -> Color(0xFF4CAF50).copy(alpha = 0.5f)
+        // 선택한 게 오답
+        isSelected && feedbackState == FeedbackState.WRONG -> Color(0xFFF44336).copy(alpha = 0.5f)
+        // 정답 알려 주기
+        !isSelected && feedbackState == FeedbackState.WRONG && isCorrectOption -> Color(0xFF4CAF50).copy(alpha = 0.5f)
+        else -> Color.Transparent
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable{
-                SoundManager.playSound(R.raw.pong)
-                onClick()
-            },
+            .clip(RoundedCornerShape(8.dp))
+            .border(
+                width = 2.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(8.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
@@ -318,78 +379,6 @@ private fun OptionItem(
     }
 }
 
-// 하단 네비게이션 Composable
-@Composable
-private fun BottomNavigation(
-    isFirst: Boolean,
-    isLast: Boolean,
-    onPrev: () -> Unit,
-    onNext: () -> Unit,
-    onSubmit: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // 이전 버튼
-        NavArrowButton(
-            iconId = R.drawable.vector,
-            onClick = onPrev,
-            enabled = !isFirst,
-            rotation = -180f
-        )
-
-        // 제출 버튼 (마지막 문제에서만 보임)
-        if (isLast) {
-            SubmitButton(onClick = onSubmit)
-        }
-
-        // 다음 버튼
-        NavArrowButton(
-            iconId = R.drawable.vector,
-            onClick = onNext,
-            enabled = !isLast
-        )
-    }
-}
-
-// 이전/다음 화살표 버튼 Composable
-@Composable
-private fun NavArrowButton(
-    iconId: Int,
-    onClick: () -> Unit,
-    enabled: Boolean,
-    rotation: Float = 0f
-) {
-    val backgroundBrush = if (enabled) {
-        Brush.linearGradient(
-            0f to Color(0xff3550dc),
-            1f to Color(0xff27e9f7)
-        )
-    } else {
-        SolidColor(AppColors.color_d4)
-    }
-
-    Box(
-        modifier = Modifier
-            .size(50.dp)
-            .clip(CircleShape)
-            .background(brush = backgroundBrush)
-            .clickable(enabled = enabled) {
-                SoundManager.playSound(R.raw.pong)
-                onClick()
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Image(
-            painter = painterResource(id = iconId),
-            contentDescription = "Arrow",
-            modifier = Modifier.rotate(rotation)
-        )
-    }
-}
-
 // 제출 버튼 Composable
 @Composable
 private fun SubmitButton(onClick: () -> Unit) {
@@ -405,7 +394,7 @@ private fun SubmitButton(onClick: () -> Unit) {
             .clickable {
                 SoundManager.playSound(R.raw.submit)
                 onClick()
-              },
+            },
         contentAlignment = Alignment.Center
     ) {
         Text(
