@@ -57,6 +57,8 @@ object SoundManager {
         soundMap[R.raw.sd_start3] = soundPool!!.load(context, R.raw.sd_start3, 1)
         soundMap[R.raw.submit] = soundPool!!.load(context, R.raw.submit, 1)
         soundMap[R.raw.back] = soundPool!!.load(context, R.raw.back, 1)
+        soundMap[R.raw.right] = soundPool!!.load(context, R.raw.right, 1)
+        soundMap[R.raw.wrong] = soundPool!!.load(context, R.raw.wrong, 1)
 
         isInitialized = true
     }
